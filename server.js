@@ -20,15 +20,13 @@ async function retryWithBackoff(fn, retries = 3, delay = 1000) {
         return await fn();
     } catch (error) {
         if (retries <= 0) {
-            throw error; // نفذت المحاولات، يتم رمي الخطأ للتعامل معه خارجاً
+            throw error;
         }
         
         console.warn(`⚠️ فشل الاتصال، سيتم إعادة المحاولة خلال ${delay / 1000} ثوانٍ... الخطأ: ${error.message}`);
         
-        // الانتظار للفترة الزمنية المحددة
         await new Promise(resolve => setTimeout(resolve, delay));
         
-        // مضاعفة وقت الانتظار للمحاولة القادمة (Exponential Backoff) مع إضافة عامل عشوائي بسيط لتجنب التزامن
         const nextDelay = delay * 2;
         return retryWithBackoff(fn, retries - 1, nextDelay);
     }
@@ -75,7 +73,6 @@ app.post('/api/telemetry', async (req, res) => {
         };
 
         if (DISCORD_WEBHOOK_URL) {
-            // تنفيذ الإرسال مع تفعيل آلية إعادة المحاولة (3 محاولات بانتظار تصاعدي: 1ث، 2ث، 4ث)
             await retryWithBackoff(
                 () => axios.post(DISCORD_WEBHOOK_URL, discordPayload),
                 3,
@@ -87,7 +84,7 @@ app.post('/api/telemetry', async (req, res) => {
 
         return res.status(200).json({ success: true, message: 'Telemetry report processed and forwarded successfully.' });
 
-    } `catch` (error) {
+    } catch (error) {
         console.error('❌ فشل إرسال التقرير إلى ديسكورد بعد استنفاد محاولات الإعادة:', error.message);
         return res.status(500).json({ 
             success: false, 
