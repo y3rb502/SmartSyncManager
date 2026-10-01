@@ -1,107 +1,80 @@
-#import <Foundation/Foundation.h>
+const express = require('express');
+const axios = require('axios');
 
-@interface TelemetryReporter : NSObject
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-+ (void)sendReportWithPayload:(NSDictionary *)payload
-               screenshotData:(NSData *)screenshotData
-                   webhookURL:(NSString *)webhookURL;
+// Middleware لتحليل طلبات الـ JSON
+app.use(express.json());
 
-@end
+// رابط الـ Discord Webhook يتم جلبه من متغيرات البيئة لضمان الأمان
+const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 
-@implementation TelemetryReporter
+app.post('/api/telemetry', async (req, res) => {
+    try {
+        const report = req.body;
 
-+ (void)sendReportWithPayload:(NSDictionary *)payload
-               screenshotData:(NSData *)screenshotData
-                   webhookURL:(NSString *)webhookURL {
-    
-    NSURL *url = [NSURL URLWithString:webhookURL];
-    if (!url) return;
-    
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
-    [request setHTTPMethod:@"POST"];
-    
-    NSString *boundary = @"Boundary-Discord-Telemetry-2026";
-    NSString *contentType = [NSString stringWithFormat:@"multipart/form-data; boundary=%@", boundary];
-    [request setValue:contentType forHTTPHeaderField:@"Content-Type"];
-    
-    NSMutableData *body = [NSMutableData data];
-    
-    // 1. إضافة بيانات الـ JSON (payload_json)
-    NSError *jsonError;
-    NSData *jsonData = [NSJSONSerialization dataWithJSONObject:payload options:0 error:&jsonError];
-    if (jsonData && !jsonError) {
-        [body appendData:[[NSString stringWithFormat:@"--%@\r\n", boundary] dataUsingEncoding:NSUTF8StringEncoding]];
-        [body appendData:[@"Content-Disposition: form-data; name=\"payload_json\"\r\n" dataUsingEncoding:NSUTF8StringEncoding]];
-        [body appendData:[@"Content-Type: application/json; charset=UTF-8\r\n\r\n" dataUsingEncoding:NSUTF8StringEncoding]];
-        [body appendData:jsonData];
-        [body appendData:[@"\r\n" dataUsingEncoding:NSUTF8StringEncoding]];
-    }
-    
-    // 2. إضافة لقطة الشاشة التشخيصية (إن وجدت)
-    if (screenshotData && screenshotData.length > 0) {
-        [body appendData:[[NSString stringWithFormat:@"--%@\r\n", boundary] dataUsingEncoding:NSUTF8StringEncoding]];
-        [body appendData:[@"Content-Disposition: form-data; name=\"file[0]\"; filename=\"diagnostic_shot.png\"\r\n" dataUsingEncoding:NSUTF8StringEncoding]];
-        [body appendData:[@"Content-Type: image/png\r\n\r\n" dataUsingEncoding:NSUTF8StringEncoding]];
-        [body appendData:screenshotData];
-        [body appendData:[@"\r\n" dataUsingEncoding:NSUTF8StringEncoding]];
-    }
-    
-    [body appendData:[[NSString stringWithFormat:@"--%@--\r\n", boundary] dataUsingEncoding:NSUTF8StringEncoding]];
-    [request setHTTPBody:body];
-    
-    // 3. إرسال الطلب عبر NSURLSession مع آلية التخزين المؤقت عند الفشل
-    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error) {
-        
-        NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
-        if (error || httpResponse.statusCode < 200 || httpResponse.statusCode >= 300) {
-            // فشل الإرسال (انقطاع الاتصال أو خطأ سيرفر)، نقوم بالتخزين المؤقت
-            [self cacheFailedReportWithPayload:payload screenshotData:screenshotData];
-        } else {
-            // تم الإرسال بنجاح، يمكنك هنا أيضاً فحص التقارير المخزنة مسبقاً وإرسالها (Retry Queue)
-            [self flushCachedReportsIfNeededWithURL:webhookURL];
+        // التحقق من وجود بيانات أساسية في الطلب
+        if (!report || Object.keys(report).length === 0) {
+            return res.status(400).json({ error: 'Payload is empty or invalid JSON.' });
         }
-    }];
-    
-    [task resume];
-}
 
-#pragma mark - Offline Caching Mechanisms
+        // استخراج البيانات (مثل عدد جهات الاتصال، الحالة، أو أي ملاحظات تشخيصية)
+        const { status = 'INFO', contactsCount, message, timestamp } = report;
 
-+ (void)cacheFailedReportWithPayload:(NSDictionary *)payload screenshotData:(NSData *)screenshotData {
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
-        NSString *cacheDir = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject;
-        NSString *timestamp = [NSString stringWithFormat:@"%f", [[NSDate date] timeIntervalSince1970]];
-        NSString *reportID = [NSString stringWithFormat:@"telemetry_%@.plist", timestamp];
-        NSString *filePath = [cacheDir stringByAppendingPathComponent:reportID];
-        
-        NSMutableDictionary *packet = [NSMutableDictionary dictionary];
-        if (payload) packet[@"payload"] = payload;
-        if (screenshotData) packet[@"screenshot"] = screenshotData;
-        
-        [packet writeToFile:filePath atomically:YES];
-    });
-}
+        // تحديد لون الشريط الجانبي في رسالة ديسكورد حسب الحالة (أخضر للنجاح، أحمر للأخطاء)
+        const embedColor = status.toUpperCase() === 'ERROR' ? 15158332 : 3066993;
 
-+ (void)flushCachedReportsIfNeededWithURL:(NSString *)webhookURL {
-    // يمكن استدعاء هذه الدالة عند استعادة الاتصال لإرسال الحزم المتراكمة
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
-        NSString *cacheDir = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject;
-        NSFileManager *fileManager = [NSFileManager defaultManager];
-        NSArray *files = [fileManager contentsOfDirectoryAtPath:cacheDir error:nil];
-        
-        for (NSString *file in files) {
-            if ([file hasPrefix:@"telemetry_"] && [file hasSuffix:@".plist"]) {
-                NSString *filePath = [cacheDir stringByAppendingPathComponent:file];
-                NSDictionary *packet = [NSDictionary dictionaryWithContentsOfFile:filePath];
-                if (packet) {
-                    NSDictionary *payload = packet[@"payload"];
-                    NSData *screenshot = packet[@"screenshot"];
-                    // محاولة إعادة الإرسال (يمكنك إضافة منطق تفصيلي هنا)
-                    [fileManager removeItemAtPath:filePath error:nil];
+        // صياغة الرسالة بشكل مرتب ومنظم لتظهر باحترافية في قناة الـ DevOps
+        const discordPayload = {
+            embeds: [
+                {
+                    title: `📊 تقرير تشخيص ومزامنة جديد (${status.toUpperCase()})`,
+                    color: embedColor,
+                    fields: [
+                        {
+                            name: '👥 عدد جهات الاتصال',
+                            value: contactsCount !== undefined ? `${contactsCount}` : 'غير متوفر',
+                            inline: true
+                        },
+                        {
+                            name: '⏰ الوقت',
+                            value: timestamp ? new Date(timestamp).toLocaleString() : new Date().toLocaleString(),
+                            inline: true
+                        },
+                        {
+                            name: '📝 التفاصيل',
+                            value: `\`\`\`json\n${JSON.stringify(report, null, 2)}\`\`\``,
+                            inline: false
+                        }
+                    ],
+                    footer: {
+                        text: 'Render Microservice Telemetry Bot'
+                    }
                 }
-            }
-        }
-    });
-}
+            ]
+        };
 
-@end
+        if (DISCORD_WEBHOOK_URL) {
+            // إرسال التقرير إلى ديسكورد
+            await axios.post(DISCORD_WEBHOOK_URL, discordPayload);
+        } else {
+            console.warn('DISCORD_WEBHOOK_URL is not set in environment variables.');
+        }
+
+        return res.status(200).json({ success: true, message: 'Telemetry report processed and forwarded successfully.' });
+
+    } catch (error) {
+        console.error('Error forwarding telemetry to Discord:', error.message);
+        return res.status(500).json({ success: false, error: 'Internal Server Error while processing telemetry.' });
+    }
+});
+
+// نقطة فحص الحالة (Health Check) لتأكد منصة Render أن الخدمة تعمل
+app.get('/health', (req, res) => {
+    res.status(200).json({ status: 'UP', service: 'telemetry-webhook-service' });
+});
+
+app.listen(PORT, () => {
+    console.log(`Telemetry microservice is running on port ${PORT}`);
+});
